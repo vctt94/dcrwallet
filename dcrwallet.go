@@ -28,6 +28,7 @@ import (
 	"decred.org/dcrwallet/spv"
 	"decred.org/dcrwallet/ticketbuyer"
 	"decred.org/dcrwallet/version"
+	"decred.org/dcrwallet/vsp"
 	"decred.org/dcrwallet/wallet"
 	"github.com/decred/dcrd/addrmgr"
 	"github.com/decred/dcrd/wire"
@@ -181,6 +182,7 @@ func run(ctx context.Context) error {
 	}()
 
 	// Open the wallet when --noinitialload was not set.
+	var vspServer *vsp.VSP
 	passphrase := []byte{}
 	if !cfg.NoInitialLoad {
 		walletPass := []byte(cfg.WalletPass)
@@ -240,11 +242,17 @@ func run(ctx context.Context) error {
 			passphrase = startPromptPass(ctx, w)
 		}
 
+		vspServer, err = vsp.New(ctx, cfg.VSPOpts.Server, cfg.VSPOpts.PubKey, cfg.dial, w, activeNet.Params)
+		if err != nil {
+			log.Errorf("vsp: %v", err)
+			return err
+		}
+
 		var tb *ticketbuyer.TB
 		if cfg.MixChange || cfg.EnableTicketBuyer {
 			tb = ticketbuyer.New(w)
 		}
-		var err error
+
 		var lastFlag, lastLookup string
 		lookup := func(flag, name string) (account uint32) {
 			if tb != nil && err == nil {
@@ -308,6 +316,7 @@ func run(ctx context.Context) error {
 				c.MixedAccountBranch = cfg.mixedBranch
 				c.TicketSplitAccount = ticketSplitAccount
 				c.ChangeAccount = changeAccount
+				c.VSP = vspServer
 			})
 			log.Infof("Starting auto transaction creator")
 			tbdone := make(chan struct{})

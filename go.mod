@@ -4,6 +4,7 @@ go 1.13
 
 require (
 	decred.org/cspp v0.3.0
+	github.com/davecgh/go-spew v1.1.1
 	github.com/decred/dcrd/addrmgr v1.1.0
 	github.com/decred/dcrd/blockchain/stake/v3 v3.0.0-20200608124004-b2f67c2dc475
 	github.com/decred/dcrd/blockchain/standalone v1.1.0

@@ -250,14 +250,14 @@ func (w *Wallet) MixAccount(ctx context.Context, dialTLS DialFunc, csppserver st
 	if err != nil {
 		return errors.E(op, err)
 	}
-	unlockedCredits := credits[:0]
+	validCredits := credits[:0]
 	for i := range credits {
 		if credits[i].Amount <= splitPoints[len(splitPoints)-1] {
 			continue
 		}
-		unlockedCredits = append(unlockedCredits, credits[i])
+		validCredits = append(validCredits, credits[i])
 	}
-	credits = unlockedCredits
+	credits = validCredits
 	shuffle(len(credits), func(i, j int) {
 		credits[i], credits[j] = credits[j], credits[i]
 	})

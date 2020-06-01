@@ -158,10 +158,7 @@ func (w *Wallet) NewUnsignedTransaction(ctx context.Context, outputs []*wire.TxO
 		if err != nil {
 			return err
 		}
-		for _, in := range authoredTx.Tx.TxIn {
-			w.lockedOutpoints[in.PreviousOutPoint] = struct{}{}
-			unlockOutpoints = append(unlockOutpoints, &in.PreviousOutPoint)
-		}
+
 		return nil
 	})
 	if err != nil {
@@ -1444,13 +1441,13 @@ func (w *Wallet) purchaseTickets(ctx context.Context, op errors.Op,
 		// Set the expiry.
 		ticket.Expiry = uint32(req.Expiry)
 
-		ticketHash := ticket.TxHash()
-		ticketHashes = append(ticketHashes, &ticketHash)
-		tickets = append(tickets, ticket)
-
-		purchaseTicketsResponse.Tickets = tickets
-		purchaseTicketsResponse.TicketHashes = ticketHashes
 		if req.DontSignTx {
+			ticketHash := ticket.TxHash()
+			ticketHashes = append(ticketHashes, &ticketHash)
+			tickets = append(tickets, ticket)
+
+			purchaseTicketsResponse.Tickets = tickets
+			purchaseTicketsResponse.TicketHashes = ticketHashes
 			continue
 		}
 		// Sign and publish tx if DontSignTx is false
@@ -1480,6 +1477,14 @@ func (w *Wallet) purchaseTickets(ctx context.Context, op errors.Op,
 			ns := tx.ReadBucket(waddrmgrNamespaceKey)
 			return w.signP2PKHMsgTx(ticket, forSigning, ns)
 		})
+
+		ticketHash := ticket.TxHash()
+		ticketHashes = append(ticketHashes, &ticketHash)
+		tickets = append(tickets, ticket)
+
+		purchaseTicketsResponse.Tickets = tickets
+		purchaseTicketsResponse.TicketHashes = ticketHashes
+
 		if err != nil {
 			return purchaseTicketsResponse, errors.E(op, err)
 		}
@@ -1521,6 +1526,45 @@ func (w *Wallet) purchaseTickets(ctx context.Context, op errors.Op,
 	}
 
 	return purchaseTicketsResponse, nil
+}
+
+// ReserveOutputsForAmount returns locked spendable outpoints from the given
+// account.  It is the responsibility of the caller to unlock the outpoints.
+func (w *Wallet) ReserveOutputsForAmount(ctx context.Context, account uint32, slots int, amount dcrutil.Amount, minconf int32) ([][]udb.Credit, error) {
+	defer w.lockedOutpointMu.Unlock()
+	w.lockedOutpointMu.Lock()
+
+	var allCredits [][]udb.Credit
+	err := walletdb.View(ctx, w.db, func(dbtx walletdb.ReadTx) error {
+		// Get current block's height
+		txmgrNs := dbtx.ReadBucket(wtxmgrNamespaceKey)
+		_, tipHeight := w.txStore.MainChainTip(txmgrNs)
+
+		for slots > 0 {
+			slots--
+
+			outputs, err := w.findEligibleOutputsAmount(dbtx, account, minconf, amount, tipHeight)
+			if err != nil {
+				return err
+			}
+			allCredits = append(allCredits, outputs)
+			for _, output := range outputs {
+				w.lockedOutpoints[output.OutPoint] = struct{}{}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		// unlock credits
+		for i := range allCredits {
+			for j := range allCredits[i] {
+				delete(w.lockedOutpoints, allCredits[i][j].OutPoint)
+			}
+		}
+		return nil, err
+	}
+
+	return allCredits, nil
 }
 
 func (w *Wallet) findEligibleOutputs(dbtx walletdb.ReadTx, account uint32, minconf int32,
@@ -1604,6 +1648,7 @@ func (w *Wallet) findEligibleOutputs(dbtx walletdb.ReadTx, account uint32, minco
 
 		eligible = append(eligible, *output)
 	}
+
 	return eligible, nil
 }
 
@@ -1611,22 +1656,29 @@ func (w *Wallet) findEligibleOutputs(dbtx walletdb.ReadTx, account uint32, minco
 // while doing maturity checks there.
 func (w *Wallet) findEligibleOutputsAmount(dbtx walletdb.ReadTx, account uint32, minconf int32,
 	amount dcrutil.Amount, currentHeight int32) ([]udb.Credit, error) {
+
 	addrmgrNs := dbtx.ReadBucket(waddrmgrNamespaceKey)
 	txmgrNs := dbtx.ReadBucket(wtxmgrNamespaceKey)
-	var outTotal dcrutil.Amount
 
-	unspent, err := w.txStore.UnspentOutputsForAmount(txmgrNs, addrmgrNs,
-		amount, currentHeight, minconf, account)
+	unspent, err := w.txStore.UnspentOutputs(txmgrNs)
 	if err != nil {
 		return nil, err
 	}
 
+	var outTotal dcrutil.Amount
 	eligible := make([]udb.Credit, 0, len(unspent))
 	for i := range unspent {
 		output := unspent[i]
 
 		// Locked unspent outputs are skipped.
 		if _, locked := w.lockedOutpoints[output.OutPoint]; locked {
+			continue
+		}
+
+		// Only include this output if it meets the required number of
+		// confirmations.  Coinbase transactions must have have reached
+		// maturity before their outputs may be spent.
+		if !confirmed(minconf, output.Height, currentHeight) {
 			continue
 		}
 
@@ -1655,10 +1707,12 @@ func (w *Wallet) findEligibleOutputsAmount(dbtx walletdb.ReadTx, account uint32,
 
 		eligible = append(eligible, *output)
 		outTotal += output.Amount
+		if outTotal >= amount {
+			break
+		}
 	}
-
 	if outTotal < amount {
-		return nil, nil
+		return nil, errors.InsufficientBalance
 	}
 
 	return eligible, nil
