@@ -242,7 +242,19 @@ func run(ctx context.Context) error {
 			passphrase = startPromptPass(ctx, w)
 		}
 
-		vspServer, err = vsp.New(ctx, cfg.VSPOpts.Server, cfg.VSPOpts.PubKey, cfg.PurchaseAccount, cfg.ChangeAccount, cfg.dial, w, activeNet.Params)
+		accountNum, err := w.AccountNumber(ctx, cfg.PurchaseAccount)
+		if err != nil {
+			log.Warnf("failed to get account number: %v", err)
+			return err
+		}
+
+		changeAcctNum, err := w.AccountNumber(ctx, cfg.PurchaseAccount)
+		if err != nil {
+			log.Warnf("failed to get account number: %v", err)
+			return err
+		}
+
+		vspServer, err = vsp.New(ctx, cfg.VSPOpts.Server, cfg.VSPOpts.PubKey, &accountNum, &changeAcctNum, cfg.dial, w, activeNet.Params)
 		if err != nil {
 			log.Errorf("vsp: %v", err)
 			return err

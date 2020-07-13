@@ -39,8 +39,8 @@ type VSP struct {
 	httpClient      *http.Client
 	params          *chaincfg.Params
 	w               *wallet.Wallet
-	purchaseAccount string
-	changeAccount   string
+	purchaseAccount uint32
+	changeAccount   uint32
 
 	queueMtx sync.Mutex
 	queue    chan *Queue
@@ -50,7 +50,7 @@ type VSP struct {
 
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
-func New(ctx context.Context, hostname, pubKeyStr, purchaseAccount, changeAccount string, dialer DialFunc, w *wallet.Wallet, params *chaincfg.Params) (*VSP, error) {
+func New(ctx context.Context, hostname, pubKeyStr string, purchaseAccount, changeAccount *uint32, dialer DialFunc, w *wallet.Wallet, params *chaincfg.Params) (*VSP, error) {
 	pubKey, err := hex.DecodeString(pubKeyStr)
 	if err != nil {
 		return nil, err
@@ -63,7 +63,7 @@ func New(ctx context.Context, hostname, pubKeyStr, purchaseAccount, changeAccoun
 		Transport: &transport,
 	}
 
-	if changeAccount == "" {
+	if changeAccount == nil {
 		changeAccount = purchaseAccount
 	}
 
@@ -74,8 +74,8 @@ func New(ctx context.Context, hostname, pubKeyStr, purchaseAccount, changeAccoun
 		params:          params,
 		w:               w,
 		queue:           make(chan *Queue),
-		purchaseAccount: purchaseAccount,
-		changeAccount:   changeAccount,
+		purchaseAccount: *purchaseAccount,
+		changeAccount:   *changeAccount,
 		outpoints:       make(map[chainhash.Hash][]udb.Credit),
 	}
 
@@ -403,13 +403,6 @@ func (v *VSP) Process(ctx context.Context, queuedItem *Queue) error {
 		return fmt.Errorf("server fee amount too high: %v > %v", feeAmount, maxFee)
 	}
 
-	// TODO - remove "default"
-	accountNum, err := v.w.AccountNumber(ctx, v.purchaseAccount)
-	if err != nil {
-		log.Warnf("failed to get account number: %v", err)
-		return err
-	}
-
 	pkScript, err := txscript.PayToAddrScript(feeAddress)
 	if err != nil {
 		log.Warnf("failed to generate pay to addr script for %v: %v", feeAddress, err)
@@ -424,13 +417,7 @@ func (v *VSP) Process(ctx context.Context, queuedItem *Queue) error {
 		},
 	}
 
-	changeAcct, err := v.w.AccountNumber(ctx, v.changeAccount)
-	if err != nil {
-		log.Warnf("failed to account number for 'change': %v", err)
-		return err
-	}
-
-	a, err := v.w.NewChangeAddress(ctx, changeAcct)
+	a, err := v.w.NewChangeAddress(ctx, v.changeAccount)
 	if err != nil {
 		log.Warnf("failed to get new change address: %v", err)
 		return err
@@ -517,7 +504,7 @@ func (v *VSP) Process(ctx context.Context, queuedItem *Queue) error {
 		}
 	}
 
-	feeTx, err := v.w.NewUnsignedTransaction(ctx, txOut, v.w.RelayFee(), accountNum, 6,
+	feeTx, err := v.w.NewUnsignedTransaction(ctx, txOut, v.w.RelayFee(), v.purchaseAccount, 6,
 		wallet.OutputSelectionAlgorithmDefault, cs, inputSource)
 	if err != nil {
 		log.Warnf("failed to create fee transaction: %v", err)
