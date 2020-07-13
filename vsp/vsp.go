@@ -34,11 +34,12 @@ const (
 )
 
 type VSP struct {
-	hostname   string
-	pubKey     ed25519.PublicKey
-	httpClient *http.Client
-	params     *chaincfg.Params
-	w          *wallet.Wallet
+	hostname        string
+	pubKey          ed25519.PublicKey
+	httpClient      *http.Client
+	params          *chaincfg.Params
+	w               *wallet.Wallet
+	purchaseAccount string
 
 	queueMtx sync.Mutex
 	queue    chan *Queue
@@ -46,7 +47,7 @@ type VSP struct {
 
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
-func New(ctx context.Context, hostname, pubKeyStr string, dialer DialFunc, w *wallet.Wallet, params *chaincfg.Params) (*VSP, error) {
+func New(ctx context.Context, hostname, pubKeyStr string, purchaseAccount string, dialer DialFunc, w *wallet.Wallet, params *chaincfg.Params) (*VSP, error) {
 	pubKey, err := hex.DecodeString(pubKeyStr)
 	if err != nil {
 		return nil, err
@@ -60,12 +61,13 @@ func New(ctx context.Context, hostname, pubKeyStr string, dialer DialFunc, w *wa
 	}
 
 	v := &VSP{
-		hostname:   hostname,
-		pubKey:     ed25519.PublicKey(pubKey),
-		httpClient: httpClient,
-		params:     params,
-		w:          w,
-		queue:      make(chan *Queue),
+		hostname:        hostname,
+		pubKey:          ed25519.PublicKey(pubKey),
+		httpClient:      httpClient,
+		params:          params,
+		w:               w,
+		queue:           make(chan *Queue),
+		purchaseAccount: purchaseAccount,
 	}
 
 	// Launch routine to process tickets.
@@ -362,7 +364,7 @@ func (v *VSP) Process(ctx context.Context, queuedItem *Queue) error {
 	}
 
 	// TODO - remove "default"
-	accountNum, err := v.w.AccountNumber(ctx, "default")
+	accountNum, err := v.w.AccountNumber(ctx, v.purchaseAccount)
 	if err != nil {
 		log.Warnf("failed to get account number: %v", err)
 		return err
