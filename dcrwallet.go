@@ -242,7 +242,7 @@ func run(ctx context.Context) error {
 			passphrase = startPromptPass(ctx, w)
 		}
 
-		vspServer, err = vsp.New(ctx, cfg.VSPOpts.Server, cfg.VSPOpts.PubKey, cfg.PurchaseAccount, cfg.dial, w, activeNet.Params)
+		vspServer, err = vsp.New(ctx, cfg.VSPOpts.Server, cfg.VSPOpts.PubKey, cfg.PurchaseAccount, cfg.ChangeAccount, cfg.dial, w, activeNet.Params)
 		if err != nil {
 			log.Errorf("vsp: %v", err)
 			return err
