@@ -63,6 +63,10 @@ func New(ctx context.Context, hostname, pubKeyStr, purchaseAccount, changeAccoun
 		Transport: &transport,
 	}
 
+	if changeAccount == "" {
+		changeAccount = purchaseAccount
+	}
+
 	v := &VSP{
 		hostname:        hostname,
 		pubKey:          ed25519.PublicKey(pubKey),
