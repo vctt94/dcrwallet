@@ -44,6 +44,8 @@ type VSP struct {
 
 	queueMtx sync.Mutex
 	queue    chan *Queue
+
+	outpoints map[chainhash.Hash][]udb.Credit
 }
 
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -70,14 +72,46 @@ func New(ctx context.Context, hostname, pubKeyStr, purchaseAccount, changeAccoun
 		queue:           make(chan *Queue),
 		purchaseAccount: purchaseAccount,
 		changeAccount:   changeAccount,
+		outpoints:       make(map[chainhash.Hash][]udb.Credit),
 	}
 
 	// Launch routine to process tickets.
 	go func() {
+		t := w.NtfnServer.TransactionNotifications()
+		defer t.Done()
+		r := w.NtfnServer.RemovedTransactionNotifications()
+		defer r.Done()
 		for {
 			select {
 			case <-ctx.Done():
 				break
+			case added := <-t.C:
+				unmined := added.UnminedTransactionHashes
+				go func() {
+					for _, addedHash := range unmined {
+						credits, exists := v.outpoints[*addedHash]
+						if exists {
+							for _, credit := range credits {
+								w.UnlockOutpoint(credit.OutPoint)
+								log.Infof("unlocked outpoint %v for added ticket %s",
+									credit.OutPoint, addedHash)
+							}
+							delete(v.outpoints, *addedHash)
+						}
+					}
+				}()
+			case removed := <-r.C:
+				txHash := removed.TxHash
+				credits, exists := v.outpoints[txHash]
+				if exists {
+					go func() {
+						for _, credit := range credits {
+							w.UnlockOutpoint(credit.OutPoint)
+							log.Infof("unlocked outpoint %v for deleted ticket %s",
+								credit.OutPoint, txHash)
+						}
+					}()
+				}
 			case queuedItem := <-v.queue:
 				err := v.Process(ctx, queuedItem)
 				if err != nil {
