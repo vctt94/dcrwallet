@@ -2431,7 +2431,7 @@ func (t *ticketbuyerV2Server) RunTicketBuyer(req *pb.RunTicketBuyerRequest, svr 
 		return status.Errorf(codes.InvalidArgument, "Negative balance to maintain given")
 	}
 
-	vspServer, err := vsp.New(svr.Context(), vspHost, vspPubKey, req.Account, req.Account, nil, wallet, params)
+	vspServer, err := vsp.New(vspHost, vspPubKey, req.Account, req.Account, nil, wallet, params)
 	if err != nil {
 		return status.Errorf(codes.Unknown, "TicketBuyerV3 instance failed to start. Error: %v", err)
 	}
