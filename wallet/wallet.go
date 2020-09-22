@@ -4281,11 +4281,7 @@ func (w *Wallet) SendOutputsToTreasury(ctx context.Context, outputs []*wire.TxOu
 		}
 	}
 
-	heldUnlock, err := w.holdUnlock()
-	if err != nil {
-		return nil, err
-	}
-	defer heldUnlock.release()
+	defer w.holdUnlock().release()
 	tx, watch, err := w.txToOutputs(ctx, op, outputs, account, changeAccount,
 		minconf, false, relayFee, false, true)
 	if err != nil {
