@@ -77,6 +77,45 @@ func translateError(err error) error {
 	return status.Errorf(code, "%s", err.Error())
 }
 
+// unlockAcctOrWallet is a helper function for unlocking the account or the
+// wallet. It returns a defer func to be called, so the wallet or account
+// can be locked.
+func unlockAcctOrWallet(ctx context.Context, wallet *wallet.Wallet, acct uint32, acctPass, walletPass []byte) (func(), error) {
+	acctEncrypted, err := wallet.AccountHasPassphrase(ctx, acct)
+	if err != nil {
+		return nil, translateError(err)
+	}
+
+	var deferMethod func()
+	if acctEncrypted {
+		err = wallet.UnlockAccount(ctx, acct, acctPass)
+		if err != nil {
+			return nil, translateError(err)
+		}
+		deferMethod = func() {
+			zero(acctPass)
+			err = wallet.LockAccount(ctx, acct)
+		}
+	} else {
+		lock := make(chan time.Time, 1)
+
+		lockWallet := func() {
+			lock <- time.Time{}
+			zero(walletPass)
+		}
+
+		err := wallet.Unlock(ctx, walletPass, lock)
+		if err != nil {
+			return nil, translateError(err)
+		}
+		deferMethod = func() {
+			lockWallet()
+		}
+	}
+
+	return deferMethod, nil
+}
+
 func errorCode(err error) codes.Code {
 	var kind errors.Kind
 	if errors.As(err, &kind) {
@@ -2370,6 +2409,21 @@ func (t *accountMixerServer) RunAccountMixer(req *pb.RunAccountMixerRequest, svr
 	if !ok {
 		return status.Errorf(codes.FailedPrecondition, "Wallet has not been loaded")
 	}
+	_, err := wallet.AccountName(svr.Context(), req.MixedAccount)
+	if err != nil {
+		return status.Errorf(codes.InvalidArgument,
+			"Mixed account :%v does not exists: %v", req.MixedAccount, err)
+	}
+	_, err = wallet.AccountName(svr.Context(), req.ChangeAccount)
+	if err != nil {
+		return status.Errorf(codes.InvalidArgument,
+			"Change account :%v does not exists: %v", req.ChangeAccount, err)
+	}
+	deferMethod, err := unlockAcctOrWallet(svr.Context(), wallet, req.ChangeAccount, req.ChangeAccountPassphrase, req.Passphrase)
+	if err != nil {
+		return translateError(err)
+	}
+	defer deferMethod()
 
 	tb := ticketbuyer.New(wallet)
 
@@ -2383,20 +2437,7 @@ func (t *accountMixerServer) RunAccountMixer(req *pb.RunAccountMixerRequest, svr
 		c.MixChange = true
 	})
 
-	lock := make(chan time.Time, 1)
-
-	lockWallet := func() {
-		lock <- time.Time{}
-		zero(req.Passphrase)
-	}
-
-	err := wallet.Unlock(svr.Context(), req.Passphrase, lock)
-	if err != nil {
-		return translateError(err)
-	}
-	defer lockWallet()
-
-	err = tb.Run(svr.Context(), req.Passphrase)
+	err = tb.RunNoPass(svr.Context())
 	if err != nil {
 		if svr.Context().Err() != nil {
 			return status.Errorf(codes.Canceled, "AccountMixer instance canceled, account number: %v", req.MixedAccount)
@@ -3403,33 +3444,11 @@ func (s *walletServer) SetAccountPassphrase(ctx context.Context, req *pb.SetAcco
 		}
 		return nil, err
 	}
-	encryptedAcct, err := s.wallet.AccountHasPassphrase(ctx, req.AccountNumber)
+	deferMethod, err := unlockAcctOrWallet(ctx, s.wallet, req.AccountNumber, req.AccountPassphrase, req.WalletPassphrase)
 	if err != nil {
-		return nil, err
+		return nil, translateError(err)
 	}
-
-	// if account is not encrypted we need to unlock the wallet. Otherwise it is
-	// used the account passphrase for it.
-	if encryptedAcct {
-		err = s.wallet.UnlockAccount(ctx, req.AccountNumber, req.AccountPassphrase)
-		if err != nil {
-			return nil, translateError(err)
-		}
-		defer func() {
-			zero(req.AccountPassphrase)
-			err = s.wallet.LockAccount(ctx, req.AccountNumber)
-		}()
-	} else {
-		lock := make(chan time.Time, 1)
-		defer func() {
-			zero(req.WalletPassphrase)
-			lock <- time.Time{} // send matters, not the value
-		}()
-		err = s.wallet.Unlock(ctx, req.WalletPassphrase, lock)
-		if err != nil {
-			return nil, translateError(err)
-		}
-	}
+	defer deferMethod()
 
 	err = s.wallet.SetAccountPassphrase(ctx, req.AccountNumber, req.NewAccountPassphrase)
 	if err != nil {

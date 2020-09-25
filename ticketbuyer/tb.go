@@ -72,15 +72,11 @@ func New(w *wallet.Wallet) *TB {
 	return &TB{wallet: w}
 }
 
-// Run executes the ticket buyer.  If the private passphrase is incorrect, or
-// ever becomes incorrect due to a wallet passphrase change, Run exits with an
-// errors.Passphrase error.
-func (tb *TB) Run(ctx context.Context, passphrase []byte) error {
-	err := tb.wallet.Unlock(ctx, passphrase, nil)
-	if err != nil {
-		return err
-	}
-
+// run is a local helper which executes the ticket buyer. If the private
+// passphrase is incorrect, or ever becomes incorrect due to a wallet
+// passphrase change, run exits with an errors.Passphrase error or an
+// errors.Locked.
+func run(tb *TB, ctx context.Context, passphrase []byte) error {
 	c := tb.wallet.NtfnServer.MainTipChangedNotifications()
 	defer c.Done()
 
@@ -174,7 +170,7 @@ func (tb *TB) Run(ctx context.Context, passphrase []byte) error {
 					default:
 						log.Errorf("Ticket purchasing failed: %v", err)
 					}
-					if errors.Is(err, errors.Passphrase) {
+					if errors.Is(err, errors.Passphrase) || errors.Is(err, errors.Locked) {
 						fatalMu.Lock()
 						fatal = err
 						fatalMu.Unlock()
@@ -190,6 +186,22 @@ func (tb *TB) Run(ctx context.Context, passphrase []byte) error {
 			}()
 		}
 	}
+}
+
+// Run executes the ticket buyer.  If the private passphrase is incorrect, or
+// ever becomes incorrect due to a wallet passphrase change, Run exits with an
+// errors.Passphrase error.
+func (tb *TB) Run(ctx context.Context, passphrase []byte) error {
+	err := tb.wallet.Unlock(ctx, passphrase, nil)
+	if err != nil {
+		return err
+	}
+	return run(tb, ctx, passphrase)
+}
+
+// RunNoPass executes the ticket buyer with the wallet already unlocked.
+func (tb *TB) RunNoPass(ctx context.Context) error {
+	return run(tb, ctx, nil)
 }
 
 func (tb *TB) buy(ctx context.Context, passphrase []byte, tip *wire.BlockHeader, expiry int32) error {
@@ -211,12 +223,15 @@ func (tb *TB) buy(ctx context.Context, passphrase []byte, tip *wire.BlockHeader,
 		return err
 	}
 
-	// Ensure wallet is unlocked with the current passphrase.  If the passphase
-	// is changed, the Run exits and TB must be restarted with the new
-	// passphrase.
-	err = w.Unlock(ctx, passphrase, nil)
-	if err != nil {
-		return err
+	// If passphrase is nil it is probably being called with no passphrase.
+	// Otherwise, we ensure wallet is unlocked with the current passphrase.
+	// If the passphase is changed, the Run exits and TB must be restarted with
+	// the new passphrase.
+	if passphrase != nil {
+		err = w.Unlock(ctx, passphrase, nil)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Read config
